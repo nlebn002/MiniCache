@@ -10,6 +10,7 @@ namespace MiniCache.Core;
 public sealed class InMemoryCache : ICache, IDisposable
 {
     private readonly ConcurrentDictionary<string, Entry> _entries = new();
+    private readonly ConcurrentBag<Entry> _entryPool = new();
     private readonly Timer _cleanupTimer;
     private readonly TimeSpan _cleanupInterval = TimeSpan.FromMinutes(1);
 
@@ -22,26 +23,64 @@ public sealed class InMemoryCache : ICache, IDisposable
 
     public void Clear()
     {
-        _entries.Clear();
+        foreach (var key in _entries.Keys)
+        {
+            if (_entries.TryRemove(key, out var entry))
+            {
+                ReleaseEntry(entry);
+            }
+        }
     }
 
     public bool Remove(string key)
     {
-        return _entries.TryRemove(key, out _);
+        if (_entries.TryRemove(key, out var entry))
+        {
+            ReleaseEntry(entry);
+            return true;
+        }
+
+        return false;
     }
 
     public void Set(string key, ReadOnlyMemory<byte> value, TimeSpan? ttl = null)
     {
         var now = DateTimeOffset.UtcNow;
         DateTimeOffset? expiresAt = ttl.HasValue ? now.Add(ttl.Value) : null;
-        _entries[key] = new Entry(value, now, expiresAt);
+
+        while (true)
+        {
+            if (_entries.TryGetValue(key, out var existing))
+            {
+                existing.Reset(value, now, expiresAt);
+                return;
+            }
+
+            var entry = AcquireEntry(value, now, expiresAt);
+            if (_entries.TryAdd(key, entry))
+            {
+                return;
+            }
+
+            if (_entries.TryGetValue(key, out existing))
+            {
+                existing.Reset(value, now, expiresAt);
+                ReleaseEntry(entry);
+                return;
+            }
+
+            ReleaseEntry(entry);
+        }
     }
 
     public bool TryGet(string key, out ReadOnlyMemory<byte> value)
     {
         if (!_entries.TryGetValue(key, out var entry) || entry.IsExpired())
         {
-            _entries.TryRemove(key, out _);
+            if (_entries.TryRemove(key, out var removed))
+            {
+                ReleaseEntry(removed);
+            }
             value = default;
             return false;
         }
@@ -56,7 +95,10 @@ public sealed class InMemoryCache : ICache, IDisposable
         metadata = default;
         if (!_entries.TryGetValue(key, out var entry) || entry.IsExpired())
         {
-            _entries.TryRemove(key, out _);
+            if (_entries.TryRemove(key, out var expiredEntry))
+            {
+                ReleaseEntry(expiredEntry);
+            }
             return false;
         }
 
@@ -71,7 +113,10 @@ public sealed class InMemoryCache : ICache, IDisposable
         {
             if (entry.IsExpired(now))
             {
-                _entries.TryRemove(key, out _);
+                if (_entries.TryRemove(key, out var removed))
+                {
+                    ReleaseEntry(removed);
+                }
             }
         }
     }
@@ -84,19 +129,19 @@ public sealed class InMemoryCache : ICache, IDisposable
     private sealed class Entry
     {
         private long _hits;
-
         public Entry(ReadOnlyMemory<byte> value, DateTimeOffset createdAt, DateTimeOffset? expiresAt)
         {
             Value = value;
             CreatedAt = createdAt;
             ExpiresAt = expiresAt;
+            _hits = 0;
         }
 
-        public ReadOnlyMemory<byte> Value { get; }
+        public ReadOnlyMemory<byte> Value { get; private set; }
 
-        public DateTimeOffset CreatedAt { get; }
+        public DateTimeOffset CreatedAt { get; private set; }
 
-        public DateTimeOffset? ExpiresAt { get; }
+        public DateTimeOffset? ExpiresAt { get; private set; }
 
         public long Hits => Interlocked.Read(ref _hits);
 
@@ -110,9 +155,33 @@ public sealed class InMemoryCache : ICache, IDisposable
             return ExpiresAt.HasValue && ExpiresAt.Value <= now;
         }
 
+        public void Reset(ReadOnlyMemory<byte> value, DateTimeOffset createdAt, DateTimeOffset? expiresAt)
+        {
+            Value = value;
+            CreatedAt = createdAt;
+            ExpiresAt = expiresAt;
+            Interlocked.Exchange(ref _hits, 0);
+        }
+
         public bool IsExpired()
         {
             return IsExpired(DateTimeOffset.UtcNow);
         }
+    }
+
+    private Entry AcquireEntry(ReadOnlyMemory<byte> value, DateTimeOffset createdAt, DateTimeOffset? expiresAt)
+    {
+        if (_entryPool.TryTake(out var entry))
+        {
+            entry.Reset(value, createdAt, expiresAt);
+            return entry;
+        }
+
+        return new Entry(value, createdAt, expiresAt);
+    }
+
+    private void ReleaseEntry(Entry entry)
+    {
+        _entryPool.Add(entry);
     }
 }

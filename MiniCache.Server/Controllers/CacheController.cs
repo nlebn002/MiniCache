@@ -50,7 +50,7 @@ public sealed class CacheController : ControllerBase
             return NotFound();
         }
 
-        var response = new CacheValueResponse(key, Convert.ToBase64String(value!));
+        var response = new CacheValueResponse(key, Convert.ToBase64String(value.Span));
         return Ok(response);
     }
 

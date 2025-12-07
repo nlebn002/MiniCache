@@ -23,14 +23,14 @@ internal sealed class CacheManager : ICacheManager
         return ValueTask.CompletedTask;
     }
 
-    public ValueTask<(bool Found, byte[]? Value)> TryGetAsync(string key)
+    public ValueTask<(bool Found, ReadOnlyMemory<byte> Value)> TryGetAsync(string key)
     {
         if (_cache.TryGet(key, out var raw))
         {
-            return ValueTask.FromResult<(bool Found, byte[]? Value)>((true, raw.ToArray()));
+            return new ValueTask<(bool Found, ReadOnlyMemory<byte> Value)>((true, raw));
         }
 
-        return new ValueTask<(bool Found, byte[]? Value)>((false, null));
+        return new ValueTask<(bool Found, ReadOnlyMemory<byte> Value)>((false, ReadOnlyMemory<byte>.Empty));
     }
 
     public ValueTask<(bool Found, CacheEntryMetadata? Metadata)> TryGetMetadataAsync(string key)

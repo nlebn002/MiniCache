@@ -10,7 +10,7 @@ public interface ICacheManager
 {
     ValueTask SetAsync(string key, ReadOnlyMemory<byte> value, TimeSpan? ttl);
 
-    ValueTask<(bool Found, byte[]? Value)> TryGetAsync(string key);
+    ValueTask<(bool Found, ReadOnlyMemory<byte> Value)> TryGetAsync(string key);
 
     ValueTask<(bool Found, CacheEntryMetadata? Metadata)> TryGetMetadataAsync(string key);
 
