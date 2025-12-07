@@ -1,8 +1,11 @@
 using BenchmarkDotNet.Attributes;
+using BenchmarkDotNet.Jobs;
 using MiniCache.Core;
 
 namespace MiniCache.Benchmarks;
 
+
+[SimpleJob(launchCount: 1, warmupCount: 1, iterationCount: 3)]
 [MemoryDiagnoser]
 public class InMemoryCacheBenchmarks
 {
@@ -10,6 +13,7 @@ public class InMemoryCacheBenchmarks
     private ReadOnlyMemory<byte> _payload = Array.Empty<byte>();
 
     [Params(1, 100, 1000)]
+
     public int InitialEntries { get; set; }
 
     [GlobalSetup]

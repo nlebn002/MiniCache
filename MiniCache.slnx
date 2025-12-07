@@ -2,4 +2,5 @@
   <Project Path="MiniCache.Core/MiniCache.Core.csproj" />
   <Project Path="MiniCache.Server/MiniCache.Server.csproj" />
   <Project Path="MiniCache.Benchmarks/MiniCache.Benchmarks.csproj" />
+  <Project Path="MiniCache.Tests/MiniCache.Tests.csproj" />
 </Solution>
