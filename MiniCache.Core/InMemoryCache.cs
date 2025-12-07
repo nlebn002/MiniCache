@@ -75,12 +75,20 @@ public sealed class InMemoryCache : ICache, IDisposable
 
     public bool TryGet(string key, out ReadOnlyMemory<byte> value)
     {
-        if (!_entries.TryGetValue(key, out var entry) || entry.IsExpired())
+        if (!_entries.TryGetValue(key, out var entry))
+        {
+            value = default;
+            return false;
+        }
+
+        var nowTicks = DateTime.UtcNow.Ticks;
+        if (entry.IsExpired(nowTicks))
         {
             if (_entries.TryRemove(key, out var removed))
             {
                 ReleaseEntry(removed);
             }
+
             value = default;
             return false;
         }
@@ -93,16 +101,22 @@ public sealed class InMemoryCache : ICache, IDisposable
     public bool TryGetMetadata(string key, out CacheEntryMetadata metadata)
     {
         metadata = default;
-        if (!_entries.TryGetValue(key, out var entry) || entry.IsExpired())
+
+        if (!_entries.TryGetValue(key, out var entry))
+            return false;
+
+        var nowTicks = DateTime.UtcNow.Ticks;
+        if (entry.IsExpired(nowTicks))
         {
             if (_entries.TryRemove(key, out var expiredEntry))
             {
                 ReleaseEntry(expiredEntry);
             }
+
             return false;
         }
 
-        metadata = new(entry.CreatedAt, entry.ExpiresAt, entry.Hits);
+        metadata = new CacheEntryMetadata(entry.CreatedAt, entry.ExpiresAt, entry.Hits);
         return true;
     }
 
@@ -111,7 +125,7 @@ public sealed class InMemoryCache : ICache, IDisposable
         var now = DateTimeOffset.UtcNow;
         foreach (var (key, entry) in _entries)
         {
-            if (entry.IsExpired(now))
+            if (entry.IsExpired(now.UtcTicks))
             {
                 if (_entries.TryRemove(key, out var removed))
                 {
@@ -124,49 +138,6 @@ public sealed class InMemoryCache : ICache, IDisposable
     public void Dispose()
     {
         _cleanupTimer.Dispose();
-    }
-
-    private sealed class Entry
-    {
-        private long _hits;
-        public Entry(ReadOnlyMemory<byte> value, DateTimeOffset createdAt, DateTimeOffset? expiresAt)
-        {
-            Value = value;
-            CreatedAt = createdAt;
-            ExpiresAt = expiresAt;
-            _hits = 0;
-        }
-
-        public ReadOnlyMemory<byte> Value { get; private set; }
-
-        public DateTimeOffset CreatedAt { get; private set; }
-
-        public DateTimeOffset? ExpiresAt { get; private set; }
-
-        public long Hits => Interlocked.Read(ref _hits);
-
-        public void IncreaseHits()
-        {
-            Interlocked.Increment(ref _hits);
-        }
-
-        public bool IsExpired(DateTimeOffset now)
-        {
-            return ExpiresAt.HasValue && ExpiresAt.Value <= now;
-        }
-
-        public void Reset(ReadOnlyMemory<byte> value, DateTimeOffset createdAt, DateTimeOffset? expiresAt)
-        {
-            Value = value;
-            CreatedAt = createdAt;
-            ExpiresAt = expiresAt;
-            Interlocked.Exchange(ref _hits, 0);
-        }
-
-        public bool IsExpired()
-        {
-            return IsExpired(DateTimeOffset.UtcNow);
-        }
     }
 
     private Entry AcquireEntry(ReadOnlyMemory<byte> value, DateTimeOffset createdAt, DateTimeOffset? expiresAt)
@@ -183,5 +154,56 @@ public sealed class InMemoryCache : ICache, IDisposable
     private void ReleaseEntry(Entry entry)
     {
         _entryPool.Add(entry);
+    }
+
+    private sealed class Entry
+    {
+        private long _hits;
+        public Entry(ReadOnlyMemory<byte> value, DateTimeOffset createdAt, DateTimeOffset? expiresAt)
+        {
+            Value = value;
+            _createdTicks = createdAt.UtcTicks;
+            _expiresTicks = expiresAt?.UtcTicks;
+            _hits = 0;
+        }
+
+        public ReadOnlyMemory<byte> Value { get; private set; }
+
+        private long _createdTicks;
+        private long? _expiresTicks;
+
+        public DateTimeOffset CreatedAt => new(_createdTicks, TimeSpan.Zero);
+
+        public DateTimeOffset? ExpiresAt => _expiresTicks.HasValue ? new DateTimeOffset(_expiresTicks.Value, TimeSpan.Zero) : null;
+
+        public long Hits => Interlocked.Read(ref _hits);
+
+        public void IncreaseHits()
+        {
+            Interlocked.Increment(ref _hits);
+        }
+
+        public bool IsExpired(long nowTicks)
+        {
+            if (!_expiresTicks.HasValue)
+            {
+                return false;
+            }
+
+            return _expiresTicks.Value <= nowTicks;
+        }
+
+        public void Reset(ReadOnlyMemory<byte> value, DateTimeOffset createdAt, DateTimeOffset? expiresAt)
+        {
+            Value = value;
+            _createdTicks = createdAt.UtcTicks;
+            _expiresTicks = expiresAt?.UtcTicks;
+            Interlocked.Exchange(ref _hits, 0);
+        }
+
+        public bool IsExpired()
+        {
+            return IsExpired(DateTimeOffset.UtcNow.UtcTicks);
+        }
     }
 }
